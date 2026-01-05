@@ -1,6 +1,7 @@
 const jwt = require("jsonwebtoken");
 const Admin = require("../models/admin.model");
 const School = require("../models/schools.model");
+const EmailRegistry = require("../models/EmailRegistry.model");
 const { getSchoolDbConnection } = require("../configs/db");
 
 // Schema imports for school database queries
@@ -8,120 +9,119 @@ const teacherSchema = require("../schemas/teacher.schema");
 const studentSchema = require("../schemas/student.schema");
 const parentSchema = require("../schemas/parent.schema");
 
-// Admin Login
+/**
+ * Unified Login - Single login for all user types
+ * User only provides email + password
+ * System auto-detects role via EmailRegistry
+ */
 const login = async (req, res) => {
     try {
-        const { username, password } = req.body;
+        const { email, password } = req.body;
 
         // Validate input
-        if (!username || !password) {
+        if (!email || !password) {
             return res.status(400).json({
                 success: false,
-                message: "Username and password are required",
+                message: "Email and password are required",
             });
         }
 
-        // Find admin by username
-        const admin = await Admin.findOne({ username });
-        if (!admin) {
+        const normalizedEmail = email.toLowerCase().trim();
+
+        // Step 1: Lookup email in EmailRegistry for fast role/school detection
+        const emailEntry = await EmailRegistry.findOne({
+            email: normalizedEmail,
+            status: "active"
+        });
+
+        if (!emailEntry) {
             return res.status(401).json({
                 success: false,
-                message: "Invalid username or password",
+                message: "Invalid email or password",
             });
         }
 
-        // Compare password (plain text for now)
-        if (password !== admin.password) {
-            return res.status(401).json({
-                success: false,
-                message: "Invalid username or password",
-            });
-        }
+        const { role, schoolId, userId } = emailEntry;
 
-        // Generate JWT token with adminId, username, role
-        const token = jwt.sign(
-            {
-                adminId: admin.adminId,
-                username: admin.username,
-                role: admin.role,
-            },
-            process.env.JWT_SECRET,
-            { expiresIn: process.env.JWT_EXPIRES_IN || "7d" }
-        );
+        let user;
+        let tokenPayload;
 
-        return res.status(200).json({
-            success: true,
-            message: "Login successful",
-            data: {
-                token,
-                admin: {
-                    adminId: admin.adminId,
-                    username: admin.username,
-                    role: admin.role,
-                },
-            },
-        });
-    } catch (error) {
-        console.error("Error during login:", error);
-        return res.status(500).json({
-            success: false,
-            message: "Error during login",
-            error: error.message,
-        });
-    }
-};
+        // Step 2: Authenticate based on role
+        if (role === "super_admin") {
+            // Super Admin - stored in Admin collection
+            user = await Admin.findOne({ email: normalizedEmail });
 
-// School Login - For teachers, students, and parents
-const schoolLogin = async (req, res) => {
-    try {
-        const { email, password, role, schoolId } = req.body;
+            if (!user || user.status !== "active") {
+                return res.status(401).json({
+                    success: false,
+                    message: "Invalid email or password",
+                });
+            }
 
-        // Validate input
-        if (!email || !password || !role || !schoolId) {
-            return res.status(400).json({
-                success: false,
-                message: "email, password, role, and schoolId are required",
-            });
-        }
+            if (password !== user.password) {
+                return res.status(401).json({
+                    success: false,
+                    message: "Invalid email or password",
+                });
+            }
 
-        // Validate role
-        const validRoles = ["teacher", "student", "parent", "sch_admin"];
-        if (!validRoles.includes(role)) {
-            return res.status(400).json({
-                success: false,
-                message: `Invalid role. Must be one of: ${validRoles.join(", ")}`,
-            });
-        }
+            tokenPayload = {
+                adminId: user.adminId,
+                email: user.email,
+                username: user.username,
+                role: user.role,
+            };
 
-        // Find school to get database name
-        const school = await School.findOne({ schoolId });
-        if (!school) {
-            return res.status(404).json({
-                success: false,
-                message: "School not found",
-            });
-        }
-
-        if (school.status !== "active") {
-            return res.status(403).json({
-                success: false,
-                message: "This school is currently inactive",
-            });
-        }
-
-        // For sch_admin, use the User model from SuperAdmin database
-        // For others, use school-specific database
-        let Model;
-        let idField;
-
-        if (role === "sch_admin") {
-            // sch_admin is stored in SuperAdmin database's Users collection
+        } else if (role === "sch_admin") {
+            // School Admin - stored in Users collection (SuperAdmin DB)
             const User = require("../models/users.model");
-            Model = User;
-            idField = "userId";
+            user = await User.findOne({ email: normalizedEmail });
+
+            if (!user || user.status !== "active") {
+                return res.status(401).json({
+                    success: false,
+                    message: "Invalid email or password",
+                });
+            }
+
+            // Verify school is active
+            const school = await School.findOne({ schoolId: user.schoolId });
+            if (!school || school.status !== "active") {
+                return res.status(403).json({
+                    success: false,
+                    message: "Your school is currently inactive",
+                });
+            }
+
+            if (password !== user.password) {
+                return res.status(401).json({
+                    success: false,
+                    message: "Invalid email or password",
+                });
+            }
+
+            tokenPayload = {
+                userId: user.userId,
+                email: user.email,
+                role: user.role,
+                schoolId: user.schoolId,
+                schoolDbName: school.schoolDbName,
+            };
+
         } else {
-            // Get school-specific database connection
+            // Teacher, Student, Parent - stored in school-specific database
+            const school = await School.findOne({ schoolId });
+
+            if (!school || school.status !== "active") {
+                return res.status(403).json({
+                    success: false,
+                    message: "Your school is currently inactive",
+                });
+            }
+
             const schoolDb = getSchoolDbConnection(school.schoolDbName);
+            let Model;
+            let idField;
 
             switch (role) {
                 case "teacher":
@@ -136,43 +136,41 @@ const schoolLogin = async (req, res) => {
                     Model = schoolDb.model("Parent", parentSchema);
                     idField = "parentId";
                     break;
+                default:
+                    return res.status(400).json({
+                        success: false,
+                        message: "Invalid user role",
+                    });
             }
-        }
 
-        // Find user by email
-        const user = await Model.findOne({ email });
-        if (!user) {
-            return res.status(401).json({
-                success: false,
-                message: "Invalid email or password",
-            });
-        }
+            user = await Model.findOne({ email: normalizedEmail });
 
-        // Check if user is active
-        if (user.status !== "active") {
-            return res.status(403).json({
-                success: false,
-                message: "Your account is currently inactive",
-            });
-        }
+            if (!user || user.status !== "active") {
+                return res.status(401).json({
+                    success: false,
+                    message: "Invalid email or password",
+                });
+            }
 
-        // Compare password (plain text for now)
-        if (password !== user.password) {
-            return res.status(401).json({
-                success: false,
-                message: "Invalid email or password",
-            });
-        }
+            if (password !== user.password) {
+                return res.status(401).json({
+                    success: false,
+                    message: "Invalid email or password",
+                });
+            }
 
-        // Generate JWT token with user details
-        const token = jwt.sign(
-            {
+            tokenPayload = {
                 userId: user[idField],
                 email: user.email,
-                role: user.role,
+                role: role,
                 schoolId: schoolId,
                 schoolDbName: school.schoolDbName,
-            },
+            };
+        }
+
+        // Step 3: Generate JWT token
+        const token = jwt.sign(
+            tokenPayload,
             process.env.JWT_SECRET,
             { expiresIn: process.env.JWT_EXPIRES_IN || "7d" }
         );
@@ -183,17 +181,15 @@ const schoolLogin = async (req, res) => {
             data: {
                 token,
                 user: {
-                    userId: user[idField],
+                    ...tokenPayload,
                     firstName: user.firstName,
                     lastName: user.lastName,
-                    email: user.email,
-                    role: user.role,
-                    schoolId: schoolId,
                 },
             },
         });
+
     } catch (error) {
-        console.error("Error during school login:", error);
+        console.error("Error during login:", error);
         return res.status(500).json({
             success: false,
             message: "Error during login",
@@ -222,7 +218,7 @@ const verifyToken = async (req, res) => {
             message: "Token is valid",
             data: {
                 userId: decoded.userId || decoded.adminId,
-                email: decoded.email || decoded.username,
+                email: decoded.email,
                 role: decoded.role,
                 schoolId: decoded.schoolId,
             },
@@ -249,16 +245,27 @@ const generateAdminId = async () => {
     return `ADM${String(newIdNumber).padStart(5, "0")}`;
 };
 
-// Create Admin
+// Create Super Admin (initial setup or by existing super_admin)
 const createAdmin = async (req, res) => {
     try {
-        const { username, password, role } = req.body;
+        const { username, email, password } = req.body;
 
         // Validate input
-        if (!username || !password) {
+        if (!username || !email || !password) {
             return res.status(400).json({
                 success: false,
-                message: "Username and password are required",
+                message: "Username, email, and password are required",
+            });
+        }
+
+        const normalizedEmail = email.toLowerCase().trim();
+
+        // Check if email already exists in EmailRegistry
+        const existingEmail = await EmailRegistry.findOne({ email: normalizedEmail });
+        if (existingEmail) {
+            return res.status(400).json({
+                success: false,
+                message: "Email already exists",
             });
         }
 
@@ -274,22 +281,34 @@ const createAdmin = async (req, res) => {
         // Generate adminId
         const adminId = await generateAdminId();
 
-        // Store password (plain text for now - add bcrypt later for production)
+        // Create admin
         const newAdmin = new Admin({
             adminId,
             username,
+            email: normalizedEmail,
             password,
-            role: role || "super_admin",
+            role: "super_admin",
+            status: "active",
         });
 
         const savedAdmin = await newAdmin.save();
 
+        // Register in EmailRegistry for unified login
+        await EmailRegistry.create({
+            email: normalizedEmail,
+            role: "super_admin",
+            schoolId: null,
+            userId: adminId,
+            status: "active",
+        });
+
         return res.status(201).json({
             success: true,
-            message: "Admin created successfully",
+            message: "Super Admin created successfully",
             data: {
                 adminId: savedAdmin.adminId,
                 username: savedAdmin.username,
+                email: savedAdmin.email,
                 role: savedAdmin.role,
             },
         });
@@ -305,8 +324,6 @@ const createAdmin = async (req, res) => {
 
 module.exports = {
     login,
-    schoolLogin,
     verifyToken,
     createAdmin,
 };
-
