@@ -12,6 +12,14 @@ const adminSchema = new mongoose.Schema(
             required: true,
             unique: true,
         },
+        email: {
+            type: String,
+            required: true,
+            unique: true,
+            lowercase: true,
+            trim: true,
+            index: true, // Index for fast email lookup
+        },
         password: {
             type: String,
             required: true,
@@ -20,6 +28,11 @@ const adminSchema = new mongoose.Schema(
             type: String,
             enum: ["super_admin"],
             default: "super_admin",
+        },
+        status: {
+            type: String,
+            enum: ["active", "inactive"],
+            default: "active",
         },
     },
     {
