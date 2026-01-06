@@ -28,7 +28,7 @@ const getMenus = async (req, res) => {
 
         const menus = await menuModel.find({
             menuAccessRoles: { $in: accessTokens },
-        }).sort({ menuOrder: 1 });
+        }, { menuAccessRoles: 0 }).sort({ menuOrder: 1 });
 
         return res.status(200).json({
             success: true,
