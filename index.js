@@ -4,6 +4,7 @@ require('dotenv').config();
 
 const { connectDB } = require('./configs/db');
 const authRoutes = require('./routes/auth.routes');
+const dashboardRoutes = require('./routes/dashboard.routes');
 
 const app = express();
 
@@ -35,6 +36,7 @@ app.use(express.urlencoded({ extended: true }));
 
 // Routes
 app.use('/api/auth', authRoutes);
+app.use('/api/auth/dashboard',dashboardRoutes);
 
 // Health check endpoint
 app.get('/health', (_req, res) => {
