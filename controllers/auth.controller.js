@@ -159,13 +159,32 @@ const login = async (req, res) => {
                 });
             }
 
+            // Build role-specific token payload
             tokenPayload = {
                 userId: user[idField],
                 email: user.email,
                 role: role,
                 schoolId: schoolId,
                 schoolDbName: school.schoolDbName,
+                firstName: user.firstName,
+                lastName: user.lastName,
             };
+
+            // Add role-specific fields
+            if (role === "teacher") {
+                tokenPayload.teacherId = user.teacherId;
+                tokenPayload.classes = user.classes || [];
+                tokenPayload.subjects = user.subjects || [];
+                tokenPayload.department = user.department;
+            } else if (role === "student") {
+                tokenPayload.studentId = user.studentId;
+                tokenPayload.class = user.class;
+                tokenPayload.section = user.section;
+                tokenPayload.rollNumber = user.rollNumber;
+            } else if (role === "parent") {
+                tokenPayload.parentId = user.parentId;
+                tokenPayload.studentIds = user.studentIds || [];
+            }
         }
 
         // Step 3: Generate JWT token
