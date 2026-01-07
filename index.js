@@ -36,7 +36,7 @@ app.use(express.urlencoded({ extended: true }));
 
 // Routes
 app.use('/api/auth', authRoutes);
-app.use('/api/auth/dashboard',dashboardRoutes);
+app.use('/api/auth/:schoolId/dashboard',dashboardRoutes);
 
 // Health check endpoint
 app.get('/health', (_req, res) => {

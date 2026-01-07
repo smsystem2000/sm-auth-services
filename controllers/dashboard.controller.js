@@ -5,7 +5,14 @@ const usersModel = require("../models/users.model");
 
 const getMenus = async (req, res) => {
     try {
-        const { role } = req.params;
+        const {  schoolId, role } = req.params;
+
+        if (!schoolId) {
+            return res.status(400).json({
+                success: false,
+                message: "School ID is required",
+            });
+        }
 
         if (!role) {
             return res.status(400).json({
@@ -23,11 +30,11 @@ const getMenus = async (req, res) => {
             });
         }
 
-        // Match menus either by role or explicit username in the access list
         const accessTokens = [user.role].filter(Boolean);
 
         const menus = await menuModel.find({
             menuAccessRoles: { $in: accessTokens },
+            schoolId: schoolId  
         }, { menuAccessRoles: 0 }).sort({ menuOrder: 1 });
 
         return res.status(200).json({
